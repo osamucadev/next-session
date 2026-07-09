@@ -10,15 +10,24 @@ ao longo do caminho.
 Stack: Next.js 16 (App Router) + Supabase Auth (GoTrue), sessão via cookie SSR
 (`@supabase/ssr`).
 
+> **Nota:** este README não é a única fonte do raciocínio por trás da solução.
+> A seção [Material de apoio](#material-de-apoio) traz dois vídeos gravados
+> durante a investigação, mostrando o processo de raciocínio conceitual antes
+> da implementação. Também foi consultada, para fundamentar a comparação
+> entre pilha (LIFO) e fila (FIFO) usada na coordenação de requisições, a
+> apostila de referência da disciplina ACH2023 (Algoritmos e Estruturas de
+> Dados I) da EACH-USP, de Willian Yukio Honda e Ivandré Paraboni:
+> [ACH2023.pdf](https://www.each.usp.br/digiampietri/ACH2023/ACH2023.pdf).
+
 ---
 
 ## Sumário
 
 1. [Causa-raiz](#causa-raiz)
 2. [Arquitetura da solução](#arquitetura-da-solução)
-3. [Diário de bordo - bugs reais encontrados durante a implementação](#diário-de-bordo)
-4. [Demonstração multi-aba (requisito 4)](#demonstração-multi-aba)
-5. [Material de apoio (vídeos)](#material-de-apoio)
+3. [Diário de bordo](#diário-de-bordo)
+4. [Demonstração multi-aba](#demonstração-multi-aba)
+5. [Material de apoio](#material-de-apoio)
 6. [Como rodar o projeto](#como-rodar-o-projeto)
 7. [Como reproduzir os testes](#como-reproduzir-os-testes)
 8. [Decisões e trade-offs](#decisões-e-trade-offs)
@@ -98,7 +107,7 @@ um lock explícito (Web Locks API) em vez de só um listener reativo
 
 ## Arquitetura da solução
 
-### Requisito 1 - Fluxo correto de sessão com `@supabase/ssr`
+### Requisito 1: Fluxo correto de sessão com `@supabase/ssr`
 
 - **`src/proxy.ts`** (middleware/proxy): roda em toda navegação, chama
   `getUser()` (que valida o JWT contra o servidor - diferente de
@@ -111,7 +120,7 @@ um lock explícito (Web Locks API) em vez de só um listener reativo
   manualmente pelo `SessionSync` (ver requisito 2), não pelo timer nativo do
   SDK (que rodaria de forma independente em cada aba).
 
-### Requisito 2 - Coordenação de refresh entre abas
+### Requisito 2: Coordenação de refresh entre abas
 
 **`src/components/session-sync.tsx`**, montado no layout raiz, implementa:
 
@@ -123,13 +132,15 @@ um lock explícito (Web Locks API) em vez de só um listener reativo
   sessão do cookie em vez de tentar renovar por conta própria.
 - **Buffer proporcional** (não fixo): o refresh é agendado a 75% da vida
   útil do token decorrida, com piso mínimo de 5s entre agendamentos - ver
-  [diário de bordo](#bug-1) para o porquê disso não ser um valor fixo.
+  [Bug 1](#bug-1-loop-de-refresh-instantâneo-com-expiração-curta) para o
+  porquê disso não ser um valor fixo.
 - **Recuperação de falso-positivo**: se mesmo assim o refresh falhar com
   "Already Used" (porque uma quarta fonte - o proxy - venceu a corrida antes
   do lock sequer ser solicitado), o código relê `getSession()` antes de
-  declarar a sessão morta - ver [bug 3](#bug-3).
+  declarar a sessão morta - ver
+  [Bug 3](#bug-3-falso-positivo-de-logout-em-refresh_token_already_used).
 
-### Requisito 3 - UX resiliente a 401
+### Requisito 3: UX resiliente a 401
 
 **`src/lib/fetch-with-auth-retry.ts`**: wrapper de `fetch` que, ao receber
 401, solicita o mesmo lock usado pelo `SessionSync` (evitando competir com
@@ -141,9 +152,9 @@ fault injection controlada - ver [seção de reprodução](#como-reproduzir-os-t
 
 ![Sequência 401, refresh e retry bem-sucedido](docs/evidencias/03-resiliencia-401-fault-injection.png)
 
-### Requisito 4 - Demonstração multi-aba
+### Requisito 4
 
-Ver seção [dedicada](#demonstração-multi-aba) abaixo.
+Ver seção [Demonstração multi-aba](#demonstração-multi-aba) abaixo.
 
 ---
 
@@ -153,7 +164,7 @@ Bugs reais descobertos e corrigidos durante a implementação - mantidos aqui
 porque documentam decisões e porque a investigação em si é parte do que este
 desafio pede.
 
-### Bug 1 - Loop de refresh instantâneo com expiração curta {#bug-1}
+### Bug 1: Loop de refresh instantâneo com expiração curta
 
 **Sintoma:** ao configurar expiração de JWT curta (60s, só para acelerar
 testes), o usuário era deslogado em minutos, mesmo com uma única aba aberta.
@@ -181,7 +192,7 @@ Depois - chamadas espaçadas de forma consistente, sem `429`:
 
 ![Chamadas de refresh espaçadas após o fix](docs/evidencias/02-fix-refresh-espacado.png)
 
-### Bug 2 - Proxy redirecionando rotas de API para `/login` (HTML) em vez de 401 (JSON) {#bug-2}
+### Bug 2: Proxy redirecionando rotas de API para /login (HTML) em vez de 401 (JSON)
 
 **Sintoma:** ao testar o requisito 3 com um token inválido, o client recebia
 `SyntaxError: JSON.parse: unexpected character` em vez de um 401 tratável.
@@ -194,7 +205,7 @@ login, mesmo em uma chamada de API que esperava JSON.
 **Correção:** rotas sob `/api` agora recebem `NextResponse.json({ error:
 'Unauthorized' }, { status: 401 })` em vez de redirect.
 
-### Bug 3 - Falso-positivo de logout em `refresh_token_already_used` {#bug-3}
+### Bug 3: Falso-positivo de logout em refresh_token_already_used
 
 **Sintoma:** ao reiniciar o servidor com o token expirado, duas abas
 simultâneas geravam `AuthApiError: Invalid Refresh Token: Already Used` e uma
@@ -214,7 +225,7 @@ normalmente, sem forçar logout.
 
 ![Duas abas se recuperando de refresh_token_already_used sem logout](docs/evidencias/04-multi-aba-sem-logout.png)
 
-### Bug 4 - Mismatch de hidratação no painel de debug
+### Bug 4: Mismatch de hidratação no painel de debug
 
 **Sintoma:** `Hydration failed` ao gerar um ID aleatório de aba via
 `useState(() => Math.random()...)`.
