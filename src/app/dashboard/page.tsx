@@ -24,7 +24,7 @@ export default function DashboardPage() {
 
   return (
     <div style={{ maxWidth: 600, margin: '4rem auto', padding: '1rem' }}>
-      <h1>Dashboard — teste de resiliência a 401</h1>
+      <h1>Dashboard - teste de resiliência a 401</h1>
       <button onClick={callProtectedRoute} disabled={loading}>
         {loading ? 'Chamando...' : 'Chamar rota protegida'}
       </button>
