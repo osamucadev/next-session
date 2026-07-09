@@ -6,8 +6,16 @@ import { createClient } from '@/lib/supabase/client'
 const CHANNEL_NAME = 'supabase-session-sync'
 const LOCK_NAME = 'supabase-refresh-lock'
 
+// Fração da vida útil do token em que disparamos o refresh proativo.
+// Ex: 0.75 significa "renove quando 75% do tempo de vida já passou".
+const REFRESH_THRESHOLD_RATIO = 0.75
+// Piso mínimo entre agendamentos, para nunca cair num loop de refresh
+// instantâneo mesmo com expirações muito curtas (ex.: testes).
+const MIN_REFRESH_DELAY_MS = 5000
+
 export function SessionSync() {
   const channelRef = useRef<BroadcastChannel | null>(null)
+  const lastIssuedAtRef = useRef<number | null>(null)
 
   useEffect(() => {
     const supabase = createClient()
@@ -16,8 +24,6 @@ export function SessionSync() {
 
     let refreshTimer: ReturnType<typeof setTimeout> | null = null
 
-    // Quando outra aba avisa que renovou a sessão, esta aba só
-    // relê a sessão do cookie -- não tenta renovar de novo.
     channel.onmessage = async (event) => {
       if (event.data === 'session-refreshed') {
         const { data } = await supabase.auth.getSession()
@@ -29,20 +35,16 @@ export function SessionSync() {
     }
 
     async function performRefresh() {
-      // Web Lock garante que, entre todas as abas desta origem,
-      // só uma execute o refresh de fato por vez.
       await navigator.locks.request(LOCK_NAME, async () => {
         const { data: sessionData } = await supabase.auth.getSession()
+        const expiresAt = sessionData.session?.expires_at
 
-        // Antes de renovar, verifica se outra aba já renovou
-        // enquanto esperávamos o lock (evita refresh duplicado).
         const stillNeedsRefresh =
-          sessionData.session &&
-          sessionData.session.expires_at !== undefined &&
-          sessionData.session.expires_at - Math.floor(Date.now() / 1000) < 60
+          expiresAt !== undefined &&
+          expiresAt - Math.floor(Date.now() / 1000) < 30
 
         if (!stillNeedsRefresh) {
-          scheduleNextRefresh(sessionData.session?.expires_at)
+          scheduleNextRefresh(expiresAt)
           return
         }
 
@@ -62,27 +64,41 @@ export function SessionSync() {
       if (refreshTimer) clearTimeout(refreshTimer)
       if (!expiresAt) return
 
-      const secondsUntilExpiry = expiresAt - Math.floor(Date.now() / 1000)
-      // Agenda o refresh 60s antes da expiração (ou imediatamente se já estiver perto)
-      const delayMs = Math.max((secondsUntilExpiry - 60) * 1000, 0)
+      const nowSeconds = Math.floor(Date.now() / 1000)
+      const secondsUntilExpiry = expiresAt - nowSeconds
+
+      // Estima a vida útil total do token com base em quando foi emitido,
+      // já que não temos "issued_at" direto -- usamos o próprio delta atual
+      // na primeira vez, e o resultado se estabiliza nas renovações seguintes.
+      const estimatedLifetime = lastIssuedAtRef.current
+        ? expiresAt - lastIssuedAtRef.current
+        : secondsUntilExpiry
+      lastIssuedAtRef.current = nowSeconds
+
+      const refreshAtSecondsRemaining =
+        estimatedLifetime * (1 - REFRESH_THRESHOLD_RATIO)
+
+      const delaySeconds = Math.max(
+        secondsUntilExpiry - refreshAtSecondsRemaining,
+        0
+      )
+
+      const delayMs = Math.max(delaySeconds * 1000, MIN_REFRESH_DELAY_MS)
 
       refreshTimer = setTimeout(performRefresh, delayMs)
     }
 
-    // Inicialização: agenda com base na sessão atual
     supabase.auth.getSession().then(({ data }) => {
       scheduleNextRefresh(data.session?.expires_at)
     })
 
-    // Também reagimos quando a aba volta a ficar visível
-    // (usuário trocou de aba e voltou) -- cenário citado no desafio.
     function handleVisibilityChange() {
       if (document.visibilityState === 'visible') {
         supabase.auth.getSession().then(({ data }) => {
           const secondsRemaining = data.session?.expires_at
             ? data.session.expires_at - Math.floor(Date.now() / 1000)
             : null
-          if (secondsRemaining !== null && secondsRemaining < 60) {
+          if (secondsRemaining !== null && secondsRemaining < 30) {
             performRefresh()
           } else {
             scheduleNextRefresh(data.session?.expires_at)
