@@ -1,5 +1,4 @@
 'use client'
-
 import { useEffect, useRef } from 'react'
 import { createClient } from '@/lib/supabase/client'
 
@@ -13,6 +12,13 @@ const REFRESH_THRESHOLD_RATIO = 0.75
 // instantâneo mesmo com expirações muito curtas (ex.: testes).
 const MIN_REFRESH_DELAY_MS = 5000
 
+// Flag de teste: quando true, esta aba NÃO agenda refresh proativo algum,
+// deixando o token expirar de verdade. Usado para validar isoladamente
+// o requisito (3) -- recuperação via fetchWithAuthRetry após um 401 real,
+// sem a rede de segurança do refresh proativo mascarar o cenário.
+const DISABLE_PROACTIVE_REFRESH =
+  process.env.NEXT_PUBLIC_DISABLE_PROACTIVE_REFRESH === 'true'
+
 export function SessionSync() {
   const channelRef = useRef<BroadcastChannel | null>(null)
   const lastIssuedAtRef = useRef<number | null>(null)
@@ -24,10 +30,15 @@ export function SessionSync() {
 
     let refreshTimer: ReturnType<typeof setTimeout> | null = null
 
+    // Mesmo com o refresh proativo desativado nesta aba, continuamos
+    // ouvindo o canal -- se outra aba (ou o fetchWithAuthRetry local)
+    // renovar a sessão, ainda queremos saber, sem por isso agendar nada.
     channel.onmessage = async (event) => {
       if (event.data === 'session-refreshed') {
         const { data } = await supabase.auth.getSession()
-        scheduleNextRefresh(data.session?.expires_at)
+        if (!DISABLE_PROACTIVE_REFRESH) {
+          scheduleNextRefresh(data.session?.expires_at)
+        }
       }
       if (event.data === 'signed-out') {
         window.location.href = '/login'
@@ -38,38 +49,31 @@ export function SessionSync() {
       await navigator.locks.request(LOCK_NAME, async () => {
         const { data: sessionData } = await supabase.auth.getSession()
         const expiresAt = sessionData.session?.expires_at
-
         const stillNeedsRefresh =
           expiresAt !== undefined &&
           expiresAt - Math.floor(Date.now() / 1000) < 30
-
         if (!stillNeedsRefresh) {
           scheduleNextRefresh(expiresAt)
           return
         }
-
         const { data, error } = await supabase.auth.refreshSession()
-
         if (error) {
           channel.postMessage('signed-out')
           return
         }
-
         channel.postMessage('session-refreshed')
         scheduleNextRefresh(data.session?.expires_at)
       })
     }
 
     function scheduleNextRefresh(expiresAt?: number) {
+      if (DISABLE_PROACTIVE_REFRESH) return
       if (refreshTimer) clearTimeout(refreshTimer)
       if (!expiresAt) return
 
       const nowSeconds = Math.floor(Date.now() / 1000)
       const secondsUntilExpiry = expiresAt - nowSeconds
 
-      // Estima a vida útil total do token com base em quando foi emitido,
-      // já que não temos "issued_at" direto -- usamos o próprio delta atual
-      // na primeira vez, e o resultado se estabiliza nas renovações seguintes.
       const estimatedLifetime = lastIssuedAtRef.current
         ? expiresAt - lastIssuedAtRef.current
         : secondsUntilExpiry
@@ -88,11 +92,14 @@ export function SessionSync() {
       refreshTimer = setTimeout(performRefresh, delayMs)
     }
 
-    supabase.auth.getSession().then(({ data }) => {
-      scheduleNextRefresh(data.session?.expires_at)
-    })
+    if (!DISABLE_PROACTIVE_REFRESH) {
+      supabase.auth.getSession().then(({ data }) => {
+        scheduleNextRefresh(data.session?.expires_at)
+      })
+    }
 
     function handleVisibilityChange() {
+      if (DISABLE_PROACTIVE_REFRESH) return
       if (document.visibilityState === 'visible') {
         supabase.auth.getSession().then(({ data }) => {
           const secondsRemaining = data.session?.expires_at

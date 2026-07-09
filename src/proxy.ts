@@ -34,11 +34,19 @@ export async function proxy(request: NextRequest) {
     data: { user },
   } = await supabase.auth.getUser()
 
-  if (
-    !user &&
-    !request.nextUrl.pathname.startsWith('/login') &&
-    !request.nextUrl.pathname.startsWith('/auth')
-  ) {
+  const isApiRoute = request.nextUrl.pathname.startsWith('/api')
+  const isPublicRoute =
+    request.nextUrl.pathname.startsWith('/login') ||
+    request.nextUrl.pathname.startsWith('/auth')
+
+  if (!user && !isPublicRoute) {
+    // Rotas de API nunca devem receber um redirect HTML -- o client
+    // (fetchWithAuthRetry) espera um 401 JSON para poder decidir se
+    // tenta recuperar a sessão antes de desistir.
+    if (isApiRoute) {
+      return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
+    }
+
     const url = request.nextUrl.clone()
     url.pathname = '/login'
     return NextResponse.redirect(url)
