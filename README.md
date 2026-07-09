@@ -2,7 +2,7 @@
 
 Solução para o desafio prático: usuários da plataforma estavam sendo deslogados
 aleatoriamente, sem padrão de tempo claro, com maior frequência ao trocar de
-aba/dispositivo ou após período de inatividade. Este repositório documenta a
+aba/dispositivo ou após período de inatividade. Este -sitório documenta a
 investigação da causa-raiz, a implementação da correção e as evidências
 coletadas durante o processo - incluindo bugs reais encontrados (e corrigidos)
 ao longo do caminho.
@@ -18,6 +18,12 @@ Stack: Next.js 16 (App Router) + Supabase Auth (GoTrue), sessão via cookie SSR
 > apostila de referência da disciplina ACH2023 (Algoritmos e Estruturas de
 > Dados I) da EACH-USP, de Willian Yukio Honda e Ivandré Paraboni:
 > [ACH2023.pdf](https://www.each.usp.br/digiampietri/ACH2023/ACH2023.pdf).
+
+🔗 **Demo ao vivo:** [https://next-session-gilt.vercel.app](https://next-session-gilt.vercel.app/login)
+(crie um usuário de teste ou peça credenciais para testar o login)
+
+email: eu@samuelcaetite.dev
+senha: 123123123
 
 ---
 
@@ -293,7 +299,7 @@ raciocínio antes da implementação.
 ## Como rodar o projeto
 
 ```bash
-git clone https://github.com/osamucadev/next-session.git
+git clone <->
 cd next-session
 npm install
 cp .env.example .env.local
