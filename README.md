@@ -293,7 +293,7 @@ raciocínio antes da implementação.
 ## Como rodar o projeto
 
 ```bash
-git clone <repo>
+git clone https://github.com/osamucadev/next-session.git
 cd next-session
 npm install
 cp .env.example .env.local
